@@ -1,0 +1,2 @@
+event_id,user_id,event_type,event_timestamp,amount,source_file
+828d3f77-cc3b-dcd3-a0e1-c028ad914279,U0130,logout,2024-11-23 11:35:34.427376533+00:00,50.0,synthetic

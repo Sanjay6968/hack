@@ -1,0 +1,2 @@
+event_id,user_id,event_type,event_timestamp,amount,source_file
+e0000000-0000-0000-0000-000000000004,U0003,purchase,2024-04-12 14:00:00+00:00,120.0,manual_upload.csv

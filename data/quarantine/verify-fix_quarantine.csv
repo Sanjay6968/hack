@@ -1,0 +1,2 @@
+event_id,user_id,event_type,event_timestamp,amount,source_file
+833a2a7f-b8e3-9664-906e-3627ad85feeb,U0150,search,2024-06-09 04:34:30.476020725+00:00,50.0,synthetic
