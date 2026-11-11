@@ -226,3 +226,88 @@ class TestPipeline:
         runs = db.get_runs()
         failed = [r for r in runs if r["run_id"] == "test-fail"]
         assert failed[0]["status"] == "failed"
+
+    def test_null_user_id_rejected(self, patch_paths):
+        df = pd.DataFrame([{
+            "event_id": "null-user", "user_id": None, "event_type": "search",
+            "event_timestamp": "2024-06-15 12:00:00+00:00", "amount": 0.0, "source_file": "test",
+        }])
+        csv_path = str(patch_paths / "data" / "raw" / "null_user.csv")
+        _write_csv(df, csv_path)
+        result = run_pipeline(csv_path, run_id="test-nulluser")
+        assert result["reconciliation"]["rejected"] == 1
+        _check_reconciliation(result)
+
+    def test_non_finite_amount_rejected(self, patch_paths):
+        df = pd.DataFrame([{
+            "event_id": "nan-amt", "user_id": "U0001", "event_type": "purchase",
+            "event_timestamp": "2024-06-15 12:00:00+00:00", "amount": "inf", "source_file": "test",
+        }])
+        csv_path = str(patch_paths / "data" / "raw" / "nan_amt.csv")
+        _write_csv(df, csv_path)
+        result = run_pipeline(csv_path, run_id="test-nanamt")
+        assert result["reconciliation"]["rejected"] == 1
+        _check_reconciliation(result)
+
+    def test_conflicting_duplicate_multiple_records(self, patch_paths):
+        rows = [
+            {"event_id": "multi-conflict", "user_id": "U0001", "event_type": "purchase",
+             "event_timestamp": "2024-06-15 12:00:00+00:00", "amount": 100.0, "source_file": "test"},
+            {"event_id": "multi-conflict", "user_id": "U0001", "event_type": "purchase",
+             "event_timestamp": "2024-06-15 12:00:00+00:00", "amount": 25.0, "source_file": "test"},
+            {"event_id": "multi-conflict", "user_id": "U0001", "event_type": "purchase",
+             "event_timestamp": "2024-06-15 12:00:00+00:00", "amount": 5.0, "source_file": "test"},
+        ]
+        df = pd.DataFrame(rows)
+        csv_path = str(patch_paths / "data" / "raw" / "multi_conflict.csv")
+        _write_csv(df, csv_path)
+        result = run_pipeline(csv_path, run_id="test-multi-conflict")
+        assert result["reconciliation"]["accepted_unique"] == 1
+        assert result["reconciliation"]["rejected"] == 2
+        _check_reconciliation(result)
+
+    def test_exact_duplicates_within_conflict_group(self, patch_paths):
+        rows = [
+            {"event_id": "exact-in-conflict", "user_id": "U0001", "event_type": "purchase",
+             "event_timestamp": "2024-06-15 12:00:00+00:00", "amount": 50.0, "source_file": "test"},
+            {"event_id": "exact-in-conflict", "user_id": "U0001", "event_type": "purchase",
+             "event_timestamp": "2024-06-15 12:00:00+00:00", "amount": 50.0, "source_file": "test"},
+            {"event_id": "exact-in-conflict", "user_id": "U0001", "event_type": "purchase",
+             "event_timestamp": "2024-06-15 12:00:00+00:00", "amount": 10.0, "source_file": "test"},
+        ]
+        df = pd.DataFrame(rows)
+        csv_path = str(patch_paths / "data" / "raw" / "exact_conflict.csv")
+        _write_csv(df, csv_path)
+        result = run_pipeline(csv_path, run_id="test-exact-conflict")
+        assert result["reconciliation"]["accepted_unique"] == 1
+        assert result["reconciliation"]["exact_duplicates"] == 1
+        assert result["reconciliation"]["rejected"] == 1
+        _check_reconciliation(result)
+
+    def test_rerun_same_run_id(self, patch_paths):
+        df = generate(30, 42)
+        csv_path = str(patch_paths / "data" / "raw" / "rerun_same.csv")
+        _write_csv(df, csv_path)
+        r1 = run_pipeline(csv_path, run_id="same-id")
+        r2 = run_pipeline(csv_path, run_id="same-id")
+        assert r1["status"] == "done"
+        assert r2["status"] == "done"
+        assert r1["reconciliation"]["accepted_unique"] == r2["reconciliation"]["accepted_unique"]
+
+    def test_analytical_parity_duckdb(self, patch_paths):
+        import duckdb
+        df = generate(100, 42)
+        csv_path = str(patch_paths / "data" / "raw" / "parity.csv")
+        _write_csv(df, csv_path)
+        run_pipeline(csv_path, run_id="test-parity")
+
+        lake = patch_paths / "data" / "lake"
+        con = duckdb.connect()
+        results = {}
+        for s in ("unpartitioned", "monthly", "daily"):
+            p = str(lake / s / "**" / "*.parquet").replace("\\", "/")
+            con.execute(f"CREATE OR REPLACE VIEW ev_{s} AS SELECT * FROM read_parquet('{p}', hive_partitioning=true)")
+            results[s] = con.execute(f"SELECT event_type, COUNT(*) as cnt, ROUND(SUM(amount), 2) as tot FROM ev_{s} GROUP BY event_type ORDER BY event_type").df()
+
+        assert results["unpartitioned"].equals(results["monthly"])
+        assert results["unpartitioned"].equals(results["daily"])

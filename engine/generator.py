@@ -134,7 +134,8 @@ def _build_defects(rng, base_df: pd.DataFrame) -> pd.DataFrame:
     for col in base_df.columns:
         if col not in result.columns:
             result[col] = None
-    return result[list(base_df.columns)]
+    all_cols = list(base_df.columns) + [c for c in result.columns if c not in base_df.columns]
+    return result[all_cols]
 
 
 def _summary(df: pd.DataFrame) -> dict:

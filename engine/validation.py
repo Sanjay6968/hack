@@ -1,10 +1,26 @@
+import os
+import math
 import json
 import pandas as pd
 from engine import db
 
 VALID_EVENT_TYPES = {"page_view", "add_to_cart", "purchase", "search", "logout"}
-VALID_USER_POOL = {f"U{i:04d}" for i in range(1, 201)}
 REQUIRED_COLUMNS = {"event_id", "user_id", "event_type", "event_timestamp", "amount", "source_file"}
+
+
+def _load_user_pool():
+    csv_path = os.path.join(os.path.dirname(__file__), "..", "data", "users.csv")
+    if os.path.exists(csv_path):
+        try:
+            udf = pd.read_csv(csv_path)
+            if "user_id" in udf.columns:
+                return set(udf["user_id"].dropna().astype(str))
+        except Exception:
+            pass
+    return {f"U{i:04d}" for i in range(1, 201)}
+
+
+VALID_USER_POOL = _load_user_pool()
 
 
 def check_schema(df):
@@ -28,20 +44,33 @@ def validate_and_split(df, run_id):
         if str(row.get("event_type", "")) not in VALID_EVENT_TYPES:
             reasons.append("invalid_event_type")
 
-        if str(row.get("user_id", "")) not in VALID_USER_POOL:
+        uid = row.get("user_id")
+        if pd.isna(uid) or str(uid).strip() == "":
+            reasons.append("null_user_id")
+        elif str(uid) not in VALID_USER_POOL:
             reasons.append("invalid_user_id")
 
-        try:
-            amt = float(row.get("amount", 0))
-            if str(row.get("event_type", "")) == "purchase" and amt < 0:
-                reasons.append("negative_purchase_amount")
-        except (ValueError, TypeError):
-            reasons.append("non_numeric_amount")
+        amt_val = row.get("amount")
+        if pd.isna(amt_val) or amt_val is None or str(amt_val).strip() == "":
+            reasons.append("missing_amount")
+        else:
+            try:
+                amt = float(amt_val)
+                if not math.isfinite(amt):
+                    reasons.append("non_finite_amount")
+                elif str(row.get("event_type", "")) == "purchase" and amt < 0:
+                    reasons.append("negative_purchase_amount")
+            except (ValueError, TypeError):
+                reasons.append("non_numeric_amount")
 
-        try:
-            pd.Timestamp(row.get("event_timestamp", ""), tz="UTC")
-        except Exception:
-            reasons.append("invalid_timestamp")
+        ts_val = row.get("event_timestamp")
+        if pd.isna(ts_val) or ts_val is None or str(ts_val).strip() == "":
+            reasons.append("null_timestamp")
+        else:
+            try:
+                pd.Timestamp(ts_val, tz="UTC")
+            except Exception:
+                reasons.append("invalid_timestamp")
 
         if reasons:
             reject(row, "|".join(reasons))
