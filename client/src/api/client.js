@@ -2,6 +2,7 @@ import axios from "axios";
 
 const api = axios.create({ baseURL: "http://localhost:3001" });
 
+export const getHealth = () => api.get("/api/health");
 export const generateData = (rows, seed) => api.post("/api/generate", { rows, seed });
 export const runPipeline = (filename, run_id) => api.post("/api/pipeline", { filename, run_id });
 export const runBenchmark = (run_id, compaction_status) => api.post("/api/benchmark", { run_id, compaction_status });
