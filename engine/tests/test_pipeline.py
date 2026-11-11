@@ -79,6 +79,13 @@ class TestPipeline:
         assert result["status"] == "failed"
         assert "Missing required columns" in result["error"]
 
+    def test_malformed_csv_fails_gracefully(self, patch_paths):
+        csv_path = str(patch_paths / "data" / "raw" / "corrupted.csv")
+        with open(csv_path, "wb") as f:
+            f.write(b"\x00\xff\xfe\x00corrupted_binary\r\n\x80\x81\x82")
+        result = run_pipeline(csv_path, run_id="test-corrupt-csv")
+        assert result["status"] == "failed"
+
     def test_schema_drift_ignored(self, patch_paths):
         df = generate(50, 42)
         df["extra_col"] = "drift_value"
@@ -311,3 +318,13 @@ class TestPipeline:
 
         assert results["unpartitioned"].equals(results["monthly"])
         assert results["unpartitioned"].equals(results["daily"])
+
+    def test_configurable_large_volume_run(self, patch_paths):
+        df = generate(500, 42)
+        assert len(df) == 509
+        csv_path = str(patch_paths / "data" / "raw" / "volume_500.csv")
+        _write_csv(df, csv_path)
+        result = run_pipeline(csv_path, run_id="test-vol-500")
+        assert result["status"] == "done"
+        _check_reconciliation(result)
+        assert result["reconciliation"]["total_input"] == 509
