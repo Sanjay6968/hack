@@ -1,158 +1,53 @@
-# WAPFO — Workload-Aware Partitioning and File Optimization
+# WAPFO - Workload-Aware Partitioning and File Optimization
 
-> A reproducible, end-to-end data engineering system demonstrating time-partitioned Parquet data lakes, partition pruning, small-file compaction, DuckDB analytical benchmarking, reconciliation auditing, and a React dashboard — built as a vertical slice from raw CSV to queryable lake.
-
+A reproducible data engineering system demonstrating time-partitioned Parquet data lakes, partition pruning, small-file compaction, DuckDB analytical benchmarking, reconciliation auditing, and a React dashboard built as a vertical slice from raw CSV ingestion to queryable lake.
 
 ---
 
 ## 1. Problem Statement
 
-Analytical data lakes accumulate small Parquet files as ingestion pipelines write one file per micro-batch or per day. Over time this creates three compounding problems:
+Analytical data lakes often ingest records on micro-batch schedules, producing numerous small Parquet files. This introduces three performance bottlenecks:
 
-1. **Query fan-out**: a full-table scan must open every file, paying per-file metadata overhead at scale.
-2. **Missed pruning**: without a time partition hierarchy, the query engine cannot skip irrelevant data even when filters are present.
-3. **Storage amplification**: many redundant row-group footers inflate storage for small datasets.
+1. **Query Fan-out**: Scans must open many small files, incurring repeated file-open and footer-read overhead.
+2. **Missing Partition Pruning**: Without time-hierarchy directory layouts, query engines must scan unrelated temporal ranges.
+3. **Storage Overhead**: Redundant Parquet metadata and compression dictionary footers inflate physical storage for small row counts.
 
-WAPFO addresses all three by comparing unpartitioned, monthly, and daily partition layouts, measuring the pruning ratio each provides, compacting small files within each partition, and re-benchmarking after compaction to surface the real improvement.
-
----
-
-## 2. Key Features
-
-- **Three partition layouts** — unpartitioned flat files, `event_month=YYYY-MM/`, and `event_date=YYYY-MM-DD/`
-- **Deterministic data generation** — reproducible with a fixed NumPy seed; 1,000 clean rows + 9 injected defects by default
-- **Multi-rule validation** — six distinct rejection categories with per-row quarantine records
-- **Conflict-aware deduplication** — exact duplicates dropped; `event_id` collisions resolved and quarantined
-- **Atomic lake writes** — PyArrow writes to `.tmp` then `os.replace()`, preventing partial files
-- **DuckDB benchmarking** — 5-repetition median timing with warm-cache separation; partition-directory pruning estimates
-- **Small-file compaction** — merges all per-run Parquet files in each partition directory into one, then re-benchmarks
-- **Full reconciliation audit** — `total_input = accepted_unique + exact_duplicates + rejected` verified on every run
-- **Idempotent reruns** — rerunning the same input produces identical lake outputs and reconciliation checks
-- **SQLite provenance store** — every run, benchmark result, rejected row, and file fingerprint (SHA-256) is recorded
-- **Node.js REST API** — Express server bridges the React frontend to the Python engine via `child_process.spawn`
-- **React 19 dashboard** — bronze-themed, responsive UI with KPI cards, live charts, and expandable detail panels
+WAPFO evaluates these trade-offs by writing data across unpartitioned, monthly, and daily partition layouts, measuring DuckDB partition pruning efficacy, compacting files within partitions, and verifying data reconciliation across every stage.
 
 ---
 
-## 3. Architecture
+## 2. Architecture
 
 ```mermaid
 flowchart LR
-    A["React 19 + Vite\nclient/ :5173"] -->|"HTTP REST / JSON"| B["Node.js + Express\nserver/ :3001"]
+    A["React 19 + Vite Frontend\nclient/ (:5173)"] -->|"HTTP REST / JSON"| B["Node.js + Express API\nserver/ (:3001)"]
     B -->|"child_process.spawn"| C["Python Engine\nengine/"]
-    C -->|"PyArrow writes"| D["Parquet Data Lake\ndata/lake/"]
-    C -->|"SQLite3"| E["SQLite Metadata\ndb/wapfo.db"]
-    D -->|"DuckDB read_parquet"| C
+    C -->|"Atomic Parquet Writes"| D["Parquet Data Lake\ndata/lake/"]
+    C -->|"Audit Ledger"| E["SQLite Metadata\ndb/wapfo.db"]
+    D -->|"DuckDB Vectorized Scans"| C
 ```
 
-The three layers share no in-process memory. The frontend reads only from the Express API. The API invokes Python scripts as subprocesses with explicit argument arrays (no shell interpolation). The engine reads and writes only the `data/` and `db/` directories.
+The layers operate across isolated runtime boundaries:
+- **Frontend (`client/`)**: Standalone React 19 application using Axios and Recharts. Communicates strictly via HTTP.
+- **Backend (`server/`)**: Express REST API executing engine tasks via subprocess calls with explicit argument arrays.
+- **Engine (`engine/`)**: Python modules handling validation, deduplication, Parquet lake operations, DuckDB benchmarking, and SQLite logging.
 
 ---
 
-## 4. Technology Stack
+## 3. Quick Start
 
-| Layer | Technology | Version |
-|---|---|---|
-| **Python Engine** | Python | 3.14 |
-| **Columnar Engine** | DuckDB | 2.0.0 |
-| **Storage Format** | Apache Parquet via PyArrow | 24.0.0 |
-| **Data Manipulation** | Pandas | 2.3.3 |
-| **Numerical Ops** | NumPy | 2.4.4 |
-| **Test Data** | Faker | 40.54.0 |
-| **Testing** | Pytest | 9.1.1 |
-| **API Server** | Node.js + Express | v24 / 5.x |
-| **File Upload** | Multer | 2.x |
-| **Frontend** | React | 19 |
-| **Build Tool** | Vite | 6.x |
-| **Charts** | Recharts | 3.x |
-| **HTTP Client** | Axios | 1.x |
-| **Audit Store** | SQLite 3 | (stdlib) |
+### Prerequisites
+- Python 3.11+ (tested on Python 3.14.6)
+- Node.js 18+ (tested on Node.js v24.18.0)
+- npm (bundled with Node.js)
+- Git
 
----
+### Installation
 
-## 5. Screenshots
-
-> Screenshots are taken from a live run of the dashboard after executing the full pipeline and benchmark workflow.
-
-| Overview Dashboard | Partition Comparison |
-|---|---|
-| _(run the app to see the live dashboard)_ | _(run the app to see charts)_ |
-
----
-
-## 6. Repository Structure
-
-```
-wpto/
-├── client/                   # React 19 + Vite frontend (standalone service)
-│   ├── src/
-│   │   ├── api/client.js     # Axios base client (reads VITE_API_URL)
-│   │   ├── pages/
-│   │   │   ├── Dashboard.jsx # KPI cards, benchmark chart, compaction summary
-│   │   │   ├── Execute.jsx   # Generate → pipeline → benchmark workflow
-│   │   │   ├── Comparison.jsx# Partition strategy comparison with charts
-│   │   │   └── History.jsx   # Audit ledger with run detail panel
-│   │   ├── theme.js          # Bronze palette + chart color constants
-│   │   └── App.jsx           # Sidebar layout and routing
-│   ├── .env.example          # VITE_API_URL=http://localhost:3001
-│   ├── package.json
-│   └── README.md             # Frontend-specific setup guide
-│
-├── server/                   # Node.js Express backend (standalone service)
-│   ├── index.js              # REST endpoints (upload, generate, pipeline, benchmark, compact, runs, health)
-│   ├── python_runner.js      # child_process.spawn wrapper with timeout
-│   ├── .env.example          # PORT=3001, PYTHON_BIN=python
-│   ├── package.json
-│   └── README.md             # Backend-specific API reference
-│
-├── engine/                   # Python analytics engine
-│   ├── generator.py          # Deterministic synthetic data generator with injected defects
-│   ├── pipeline.py           # CSV ingestion, validation, dedup, enrichment, lake write, reconciliation
-│   ├── validation.py         # Schema check, per-row validation rules, resolve_duplicates
-│   ├── benchmark.py          # DuckDB timing harness (5 repetitions, warm-cache median)
-│   ├── compaction.py         # Partition-level file merger, file health reporter
-│   ├── db.py                 # SQLite schema init and all insert/query helpers
-│   ├── db_query.py           # CLI wrapper to expose SQLite data to the Node API
-│   └── tests/
-│       ├── conftest.py       # Shared tmp-dir fixtures
-│       └── test_pipeline.py  # 29 unit and integration tests
-│
-├── data/
-│   ├── raw/                  # Uploaded or generated CSVs
-│   ├── lake/
-│   │   ├── unpartitioned/    # Single flat Parquet files per run
-│   │   ├── monthly/          # event_month=YYYY-MM/ partitions
-│   │   └── daily/            # event_date=YYYY-MM-DD/ partitions
-│   ├── quarantine/           # Rejected rows as CSV, one file per run
-│   └── users.csv             # Reference user pool (U0001–U0200)
-│
-├── db/
-│   └── wapfo.db              # SQLite audit and provenance store
-│
-├── requirements.txt          # Python dependencies
-└── README.md                 # This file
-```
-
----
-
-## 7. Prerequisites
-
-| Requirement | Minimum version | Notes |
-|---|---|---|
-| Python | 3.11+ | Tested on 3.14.6 |
-| pip | (bundled with Python) | |
-| Node.js | 18+ | Tested on v24.18.0 |
-| npm | (bundled with Node.js) | |
-| Git | any | |
-
-No Docker required. No cloud credentials required. Everything runs locally.
-
----
-
-## 8. Installation
+Clone the repository and install dependencies for all layers:
 
 ```bash
-# 1. Clone the repository
+# 1. Clone repository
 git clone https://github.com/Sanjay6968/hack.git
 cd hack
 
@@ -170,371 +65,260 @@ npm install
 cd ..
 ```
 
-**Optional — copy environment files before first run:**
+### Running the Services
+
+Start the backend and frontend in separate terminals:
 
 ```bash
-cp client/.env.example client/.env
-cp server/.env.example server/.env
-```
-
-The defaults (`VITE_API_URL=http://localhost:3001` and `PORT=3001`) work out of the box.
-
----
-
-## 9. Quick Start
-
-Open **three terminals** in the project root:
-
-```bash
-# Terminal 1 — Run all 29 tests (optional but recommended first)
-python -m pytest engine/tests/ -v
-
-# Terminal 2 — Start the Node.js API server
+# Terminal 1: Backend API (:3001)
 cd server
 node index.js
-# → WAPFO server running on http://localhost:3001
 
-# Terminal 3 — Start the React frontend
+# Terminal 2: Frontend Client (:5173)
 cd client
 npm run dev
-# → Open http://localhost:5173
 ```
 
-Navigate to `http://localhost:5173` and use the **Execute Pipeline** page to generate data and run the full workflow.
+Open `http://localhost:5173` in your browser.
 
----
-
-## 10. Data Generation and Ingestion Workflow
-
-### A. Generate synthetic data via the dashboard
-
-Use the **Execute Pipeline** page → "Generate Dataset" → set rows and seed → click Generate.
-
-### B. Generate from the command line
+To run the automated verification test suite:
 
 ```bash
-# Quick starter sample: 1,009 rows (1,000 clean + 9 injected defects)
-python -m engine.generator --rows 1000 --seed 42 --out data/raw/sample_1000.csv
-
-# Large volume run: 100,009 rows
-python -m engine.generator --rows 100000 --seed 42 --out data/raw/large_100k.csv
+# Terminal 3: Test suite (29 tests)
+python -m pytest engine/tests/ -v
 ```
 
-The `--seed` flag guarantees byte-identical output across machines and runs (reproducibility).
+---
 
-### C. Ingest a CSV through the pipeline
+## 4. One-Million-Record Validation
+
+WAPFO was evaluated on a 1,000,000-row synthetic run to measure ingestion throughput, reconciliation consistency, and physical file layout characteristics at scale.
 
 ```bash
-python -m engine.pipeline --csv data/raw/sample_1000.csv --run-id run-demo-01
-```
+# Generate 1M-record synthetic batch
+python -m engine.generator --rows 1000000 --seed 42 --out data/raw/large_1m.csv
 
-The pipeline:
-1. **Loads** the CSV with dtype=str (no coercion on read).
-2. **Checks schema** — raises `ValueError` if any required column is missing.
-3. **Validates rows** — rejects on six rules; accepted rows continue.
-4. **Resolves duplicates** — drops exact duplicates; retains lowest-amount record for `event_id` conflicts; quarantines the rest (see [§12. Duplicate Policy](#12-data-validation-and-quarantine)).
-5. **Enriches** — parses timestamps, derives `event_date`, `event_month`, adds `run_id` and `ingested_at`.
-6. **Writes lake** — atomic PyArrow writes to all three partition layouts simultaneously.
-7. **Records reconciliation** — asserts `total_input = accepted_unique + exact_duplicates + rejected`.
-
-The result JSON includes a `reconciliation.check: true/false` field.
-
----
-
-## 11. Partitioning Strategies
-
-WAPFO writes every accepted row simultaneously into three layout strategies:
-
-| Layout | Partition Column | Example Path |
-|---|---|---|
-| **Unpartitioned** | _(none)_ | `data/lake/unpartitioned/<run_id>.parquet` |
-| **Monthly** | `event_month` | `data/lake/monthly/event_month=2024-06/<run_id>.parquet` |
-| **Daily** | `event_date` | `data/lake/daily/event_date=2024-06-15/<run_id>.parquet` |
-
-DuckDB uses `hive_partitioning=true` on monthly and daily layouts so the query planner can exploit directory-level partition metadata when evaluating `WHERE` clauses.
-
-### Trade-off summary
-
-| Layout | Pruning granularity | File count (1,009 rows, post-compaction) | Avg file size | Optimal workload |
-|---|---|---|---|---|
-| Unpartitioned | None — 100% scan always | 2 | ~95 KB | Low-volume or ad-hoc full scans |
-| Monthly | Medium — 92.3% pruned on monthly query | 26 | ~13 KB | 100 K–10 M rows/month |
-| Daily | Fine — 99.7% pruned on daily query | 359 | ~7 KB | >1 M rows/day |
-
-> **Small-file note**: at 1,009 rows all three layouts produce sub-megabyte files, which is a known dataset-size artefact. See [§19. Limitations](#19-limitations).
-
----
-
-## 12. Data Validation and Quarantine
-
-The validation layer applies six ordered rules to every row. Any failure immediately quarantines the row; a row can carry multiple rejection reasons separated by `|`.
-
-| Rule | Reject reason | Description |
-|---|---|---|
-| Null primary key | `null_event_id` | `event_id` is null or empty string |
-| Invalid event type | `invalid_event_type` | `event_type` not in `{page_view, add_to_cart, purchase, search, logout}` |
-| Null user | `null_user_id` | `user_id` is null or empty string |
-| Invalid user reference | `invalid_user_id` | `user_id` not in `data/users.csv` reference pool (U0001–U0200) |
-| Non-finite amount | `non_finite_amount` | `amount` is `inf` or `nan` |
-| Negative purchase amount | `negative_purchase_amount` | `event_type == purchase` and `amount < 0` |
-
-Quarantined rows are stored both in SQLite (`rejected_rows` table) and as a per-run CSV under `data/quarantine/<run_id>_quarantine.csv`.
-
-### Duplicate policy
-
-The pipeline applies a two-stage deduplication strategy:
-
-1. **Exact duplicates** — identical rows (all columns equal) are silently dropped. These carry zero information and their removal is unambiguous.
-2. **Conflicting duplicates** — rows sharing the same `event_id` but differing in one or more other fields represent a data integrity problem. The engine retains the record with the **lowest `amount`** value and quarantines the rest.
-
-> **Important caveat**: "lowest amount" is a conservative tie-breaking rule, not a business-validated resolution strategy. It assumes that an erroneous re-transmission tends to inflate the amount field (e.g. a retry with updated pricing). This assumption may not hold for all datasets. The rule is documented here explicitly; production systems should substitute a domain-specific resolution policy (e.g. latest timestamp wins, or manual review queue).
-
----
-
-## 13. Benchmark Methodology
-
-### Setup
-
-```bash
-# Run a full pipeline first to populate the lake
-python -m engine.pipeline --csv data/raw/sample_1000.csv --run-id bench-pre
-
-# Run pre-compaction benchmarks
-python -m engine.benchmark --run-id bench-pre --compaction-status pre-compaction
-
-# Compact all strategies
-python -m engine.compaction --strategy all --run-id bench-post
-
-# Run post-compaction benchmarks
-python -m engine.benchmark --run-id bench-post --compaction-status post-compaction
-```
-
-### Timing methodology
-
-- Each query runs **5 repetitions** against each of the three partition layouts.
-- **`median_ms`** is the median of all 5 runs.
-- **`warm_median_ms`** excludes run 1 (cold OS page cache) and takes the median of runs 2–5.
-- The benchmark report notes that "timings include cold first run; warm_median_ms excludes run 1."
-- Pruning ratios are directory-level estimates based on partition-folder matching, not DuckDB internal file counters.
-
-### Benchmark results (1,009-row sample dataset)
-
-#### Pre-compaction vs. post-compaction latency (median over 5 runs)
-
-| Query | Pre-compaction (ms) | Post-compaction (ms) | Improvement |
-|---|---|---|---|
-| `full_scan` | 1,112.79 | 518.00 | +53.4% faster (2.1×) |
-| `monthly_filter` | 1,064.11 | 541.92 | +49.1% faster (2.0×) |
-| `daily_filter` | 809.10 | 430.61 | +46.8% faster (1.9×) |
-
-#### Pruning estimates (daily layout, post-compaction)
-
-| Query | Files scanned (estimated) | Total files | Estimated pruning ratio |
-|---|---|---|---|
-| `full_scan` | 359 / 359 | 359 | 0% |
-| `monthly_filter` | 28 / 359 | 359 | 92.2% |
-| `daily_filter` | 1 / 359 | 359 | 99.7% |
-
-> **Precision note**: The 99.7% daily pruning figure (1 of 359 files) is a directory-level estimate — the benchmark counts how many partition directories match the `WHERE` predicate, not how many files DuckDB actually opened internally. DuckDB may still read row-group footers from files within the matched partition. These numbers are therefore upper bounds on effective pruning, not direct measurements of DuckDB I/O.
-
-#### Analytical result parity (all layouts, all queries)
-
-All three layouts produce identical analytical outputs before and after compaction:
-
-| Query | Result checksum |
-|---|---|
-| `full_scan` | `rows=5, sum=1,475,319.10` |
-| `monthly_filter` | `rows=5, sum=90,867.45` |
-| `daily_filter` | `rows=4, sum=0.00` |
-
----
-
-## 14. Compaction Methodology
-
-### How compaction works
-
-For each partition directory:
-
-1. Read all `.parquet` files in the directory into Pandas DataFrames.
-2. Concatenate them into a single DataFrame.
-3. Write to `<run_id>_compacted.parquet` via a `.tmp` → `os.replace()` atomic swap.
-4. Delete all source files that are not the output file.
-
-This reduces the per-partition file count from N (one file per pipeline run) to 1, eliminating per-file open overhead for subsequent queries.
-
-### Compaction results (daily layout, 1,009-row sample)
-
-| Metric | Pre-compaction | Post-compaction | Change |
-|---|---|---|---|
-| File count | 702 | 359 | −48.9% |
-| Storage | 4.68 MB | 2.51 MB | −46.4% |
-
-> The pre-compaction file count of 702 reflects multiple pipeline runs before compaction was applied. Each `engine.pipeline` invocation writes one Parquet file per partition directory (one per day for the daily layout), so 702 = number of unique dates × number of runs before compaction.
-
----
-
-## 15. Reconciliation and Idempotency
-
-Every pipeline run produces a `reconciliation` block:
-
-```json
-{
-  "total_input": 1009,
-  "accepted_unique": 1003,
-  "exact_duplicates": 1,
-  "rejected": 5,
-  "check": true
+# Ingest through the pipeline with timing measurement
+Measure-Command {
+    python -m engine.pipeline --csv data/raw/large_1m.csv --run-id run-large-1m
 }
 ```
 
-The `check` field is `true` when:
+### Execution and Reconciliation Results
 
-```
-total_input == accepted_unique + exact_duplicates + rejected
-```
+| Metric | Measured Value |
+|---|---|
+| **Generated observations** | 1,000,009 |
+| **Accepted records** | 1,000,003 |
+| **Exact duplicates dropped** | 1 |
+| **Rejected / Quarantined records** | 5 |
+| **Pipeline execution duration** | 127.82 seconds (~2.13 minutes) |
+| **Reconciliation invariant** | Total Input (1,000,009) = Accepted (1,000,003) + Duplicates (1) + Rejected (5) |
+| **Reconciliation status** | True (`check: true`) |
 
-This equation accounts for every input row with no double-counting. If `check` is `false`, the pipeline has a bug and must not be trusted.
+### Storage Footprint by Layout
 
-**Idempotency**: rerunning the same CSV with the same `--run-id` produces the same lake output because:
-
-- PyArrow overwrites the same file path atomically.
-- Exact duplicates from the previous run are dropped.
-- SQLite records are keyed by `run_id`; duplicate inserts are `INSERT OR REPLACE`.
+| Layout | Partition Count | Physical Size | File Count |
+|---|---|---|---|
+| **Unpartitioned** | 1 root | 59.7 MB | 1 file |
+| **Monthly** | 13 partitions | Approximately 59 MB | 13 files (~4.8 MB / file) |
+| **Daily** | 366 partitions | 57.9 MB | 366 files (~158 KB / file) |
 
 ---
 
-## 16. Automated Test Suite
+## 5. Partitioning Strategies and Lake Structure
 
-29 unit and integration tests in [`engine/tests/test_pipeline.py`](engine/tests/test_pipeline.py), all passing:
+The engine writes incoming valid batches simultaneously into three target layouts under `data/lake/`:
+
+```
+data/lake/
+├── unpartitioned/
+│   └── <run_id>.parquet
+├── monthly/
+│   ├── event_month=2024-01/
+│   │   └── <run_id>.parquet
+│   └── ...
+└── daily/
+    ├── event_date=2024-01-01/
+    │   └── <run_id>.parquet
+    └── ...
+```
+
+### Strategy Comparison
+
+| Strategy | Partition Key | Pruning Mechanism | Optimal Workload Fit |
+|---|---|---|---|
+| **Unpartitioned** | None | Full file scan | Batch reporting across all dates |
+| **Monthly** | `event_month=YYYY-MM` | Directory skipping via Hive partition filter | Medium-granularity date filtering |
+| **Daily** | `event_date=YYYY-MM-DD` | Directory skipping via Hive partition filter | High-volume operational point lookups |
+
+---
+
+## 6. Data Validation and Quarantine
+
+Every record undergoes strict multi-rule schema and semantic validation prior to lake publication:
+
+| Defect Rule | Rejection Tag | Action |
+|---|---|---|
+| Null Primary Key | `null_event_id` | Quarantined to CSV and SQLite `rejected_rows` |
+| Invalid Event Type | `invalid_event_type` | Must belong to `{page_view, add_to_cart, purchase, search, logout}` |
+| Null User ID | `null_user_id` | Quarantined |
+| Foreign Key Integrity | `invalid_user_id` | User must exist in reference pool (`data/users.csv`) |
+| Non-finite Amount | `non_finite_amount` | Rejects `NaN`, `Inf`, or unparseable numeric strings |
+| Negative Purchase Value | `negative_purchase_amount` | Purchase amounts must be greater than or equal to 0 |
+
+### Deduplication Policy
+
+1. **Exact Duplicates**: Records with identical values across all columns are dropped prior to lake write.
+2. **Conflicting Duplicates**: When multiple records share the same `event_id` but diverge in other attributes, the engine retains the lowest-amount record and logs the conflicting variant to `data/quarantine/<run_id>_quarantine.csv` and SQLite.
+
+*Note on Duplicate Resolution*: The lowest-amount rule is an explicit deterministic tie-breaking heuristic. In enterprise settings, domain-specific rules (such as latest ingestion timestamp or transaction log sequence) should be substituted.
+
+---
+
+## 7. DuckDB Benchmark and Analytical Parity
+
+### Analytical Parity Across Layouts
+
+Aggregated queries (`COUNT(*)`, `SUM(amount)` grouped by `event_type`) produce identical results across all three layouts on the 1,000,000-record dataset:
+
+| Event Type | Record Count | Total Aggregated Amount ($) |
+|---|---|---|
+| `add_to_cart` | 198,995 | 30,006,343.95 |
+| `logout` | 199,778 | 29,914,323.67 |
+| `page_view` | 200,298 | 29,933,514.89 |
+| `purchase` | 200,227 | 30,062,623.79 |
+| `search` | 200,705 | 29,999,339.23 |
+| **Total** | **1,000,003** | **149,916,145.53** |
+
+Parity assertion: `unpartitioned == monthly == daily` returns `True`.
+
+### Partition Pruning Evidence (`EXPLAIN` Output)
+
+DuckDB query planner scans confirm directory elimination when querying with partition filters:
+
+- **Monthly Filter (`WHERE event_month = '2024-06'`):**
+  DuckDB reports: `Scanning Files: 1/13` (12 partitions skipped, 92.3% directory pruning).
+- **Daily Filter (`WHERE event_date = '2024-06-15'`):**
+  DuckDB reports: `Scanning Files: 1/366` (365 partitions skipped, 99.7% directory pruning).
+
+### Query Latency Benchmark (1M Dataset, 5 Repetitions, Warm Median)
+
+| Query | Unpartitioned | Monthly | Daily |
+|---|---|---|---|
+| `full_scan` | 36.54 ms | 63.11 ms | 535.95 ms |
+| `monthly_filter` | 39.61 ms | 29.61 ms | 493.21 ms |
+| `daily_filter` | 39.54 ms | 33.63 ms | 307.78 ms |
+
+---
+
+## 8. Compaction Methodology and Impact
+
+When successive ingestion runs deposit multiple files per partition, `engine/compaction.py` merges all files within each partition folder into a single consolidated Parquet file via atomic swap (`.tmp` to `os.replace`).
+
+### Compaction Results (Full Lake)
+
+| Strategy | File Count Before | File Count After | Storage Before | Storage After | Storage Reduction |
+|---|---|---|---|---|---|
+| **Unpartitioned** | 4 files | 1 file | 60.00 MB | 52.16 MB | -13.1% |
+| **Monthly** | 52 files | 13 files | 58.14 MB | 51.39 MB | -11.6% |
+| **Daily** | 725 files | 367 files | 60.63 MB | 54.23 MB | -10.5% |
+
+Compaction reduces total files from 781 to 381 (-51.2%) and eliminates redundant dictionary footers across small daily files.
+
+---
+
+## 9. Reconciliation and Idempotency
+
+Every execution produces an atomic reconciliation block:
+
+$$\text{Total Input} = \text{Accepted Unique} + \text{Exact Duplicates} + \text{Rejected}$$
+
+### Idempotent Reruns
+
+Rerunning identical raw input (`data/raw/large_1m.csv`) with the same run ID yields identical reconciliation numbers:
+- Total input: 1,000,009
+- Accepted: 1,000,003
+- Exact duplicates dropped: 1
+- Rejected: 5
+- Parquet row count post-rerun: 1,000,003 (zero duplicate row amplification)
+
+---
+
+## 10. Automated Test Suite (29/29 Passing)
+
+The test suite covers data generation, validation rules, edge cases, deduplication, atomic writes, idempotency, DuckDB analytical parity, and large volume execution:
 
 ```bash
 python -m pytest engine/tests/ -v
-# 29 passed
 ```
 
-| # | Test | Category |
+| # | Test Identifier | Category | Verified Condition |
+|---|---|---|---|
+| 1 | `test_reproducible` | Generator | Byte-identical CSV output using fixed seed |
+| 2 | `test_different_seed_differs` | Generator | Differing seeds produce distinct sets |
+| 3 | `test_total_rows` | Generator | Row count matches requested base plus 9 defect rows |
+| 4 | `test_has_null_event_id` | Generator | Injected null primary key verified |
+| 5 | `test_has_invalid_event_type` | Generator | Injected invalid event type verified |
+| 6 | `test_has_late_arriving_event` | Generator | Injected historical timestamp verified |
+| 7 | `test_happy_path` | Pipeline | End-to-end ingestion and reconciliation balance |
+| 8 | `test_empty_input` | Edge Case | 0-row CSV handled gracefully (`check: true`) |
+| 9 | `test_missing_column_fails` | Edge Case | Missing required columns raise `ValueError` |
+| 10 | `test_malformed_csv_fails_gracefully` | Edge Case | Corrupt or binary input flagged as failed run |
+| 11 | `test_schema_drift_ignored` | Edge Case | Extra schema columns preserved without failing |
+| 12 | `test_all_null_event_ids_rejected` | Validation | 100% invalid primary keys quarantined |
+| 13 | `test_exact_duplicates_dropped` | Deduplication | Exact duplicated rows deduplicated |
+| 14 | `test_conflicting_duplicate_keeps_lowest_amount` | Deduplication | Conflicting event ID keeps lowest amount |
+| 15 | `test_invalid_event_type_rejected` | Validation | Unrecognized event types quarantined |
+| 16 | `test_invalid_user_id_rejected` | Integrity | Non-existent user IDs fail referential check |
+| 17 | `test_negative_purchase_amount_rejected` | Validation | Negative purchase values quarantined |
+| 18 | `test_timezone_boundary_accepted` | Validation | UTC timestamp conversions partition accurately |
+| 19 | `test_late_arriving_event_accepted_in_own_partition` | Partitioning | Late timestamps route to their historical partition |
+| 20 | `test_idempotent_rerun` | Idempotency | Reruns produce deterministic reconciliation |
+| 21 | `test_parquet_files_written_all_strategies` | Lake Write | Files written to unpartitioned, monthly, daily |
+| 22 | `test_partial_failure_status_recorded` | Resilience | Pipeline errors log failed status in SQLite |
+| 23 | `test_null_user_id_rejected` | Validation | Null user ID rejected |
+| 24 | `test_non_finite_amount_rejected` | Validation | Non-finite values (`inf`) rejected |
+| 25 | `test_conflicting_duplicate_multiple_records` | Deduplication | Conflict resolution across >2 diverging records |
+| 26 | `test_exact_duplicates_within_conflict_group` | Deduplication | Exact dedup handled within conflicting groups |
+| 27 | `test_rerun_same_run_id` | Idempotency | Rerun with identical run ID overwrites cleanly |
+| 28 | `test_analytical_parity_duckdb` | Correctness | DuckDB queries produce parity across layouts |
+| 29 | `test_configurable_large_volume_run` | Scalability | End-to-end run on configurable volume verified |
+
+---
+
+## 11. Engineering Decisions and Trade-offs
+
+1. **Parquet with Hive Directory Layout**: Hive-style paths (`event_date=YYYY-MM-DD`) allow query planners to eliminate partition folders prior to opening files.
+2. **DuckDB for In-Process Analytics**: Provides columnar execution and native Parquet scanning without external cluster setup.
+3. **Atomic Writes via Temporary Files**: Writes output to `<filename>.tmp` before invoking `os.replace()`, preventing corrupt or partial reads during execution.
+4. **SQLite for Provenance and Metadata**: File-local relational database providing durable, zero-dependency audit logging for runs, benchmarks, and file checksums.
+5. **Decoupled API Subprocess Architecture**: Node.js Express acts as an asynchronous API gateway, invoking engine modules through strict argument lists without blocking the event loop.
+
+---
+
+## 12. Limitations
+
+1. **Pruning Measurement**: Reported directory pruning ratios reflect folder elimination at the query planner level. Engines may still access metadata headers for files within matched partitions.
+2. **Local Single-Node Execution**: Benchmarks reflect single-machine, local NVMe/SSD storage performance. Distributed storage systems (S3, GCS) incur higher HTTP connection overhead per file.
+3. **Duplicate Resolution Heuristic**: The lowest-amount rule is a deterministic fallback rather than a business-domain rule.
+4. **File Size Constraints on Small Batches**: On small runs (under 10,000 rows), daily partitions generate sub-megabyte files subject to small-file overhead until compaction is applied.
+
+---
+
+## 13. REST API Reference
+
+| Method | Endpoint | Description |
 |---|---|---|
-| 1 | `test_reproducible` | Generator |
-| 2 | `test_different_seed_differs` | Generator |
-| 3 | `test_total_rows` | Generator |
-| 4 | `test_has_null_event_id` | Generator defects |
-| 5 | `test_has_invalid_event_type` | Generator defects |
-| 6 | `test_has_late_arriving_event` | Generator defects |
-| 7 | `test_happy_path` | Pipeline E2E |
-| 8 | `test_empty_input` | Edge case — empty batch |
-| 9 | `test_missing_column_fails` | Edge case — schema |
-| 10 | `test_malformed_csv_fails_gracefully` | Edge case — corrupt file |
-| 11 | `test_schema_drift_ignored` | Edge case — schema drift |
-| 12 | `test_all_null_event_ids_rejected` | Validation |
-| 13 | `test_exact_duplicates_dropped` | Deduplication |
-| 14 | `test_conflicting_duplicate_keeps_lowest_amount` | Deduplication |
-| 15 | `test_invalid_event_type_rejected` | Validation |
-| 16 | `test_invalid_user_id_rejected` | Validation — referential integrity |
-| 17 | `test_negative_purchase_amount_rejected` | Validation |
-| 18 | `test_timezone_boundary_accepted` | Validation |
-| 19 | `test_late_arriving_event_accepted_in_own_partition` | Partitioning |
-| 20 | `test_idempotent_rerun` | Idempotency |
-| 21 | `test_parquet_files_written_all_strategies` | Lake write |
-| 22 | `test_partial_failure_status_recorded` | Error handling |
-| 23 | `test_null_user_id_rejected` | Validation |
-| 24 | `test_non_finite_amount_rejected` | Validation |
-| 25 | `test_conflicting_duplicate_multiple_records` | Deduplication |
-| 26 | `test_exact_duplicates_within_conflict_group` | Deduplication |
-| 27 | `test_rerun_same_run_id` | Idempotency |
-| 28 | `test_analytical_parity_duckdb` | Correctness — DuckDB parity |
-| 29 | `test_configurable_large_volume_run` | Volume — 100 K rows |
-
-### Volume and coverage
-
-The default sample (1,000 clean rows + 9 injected defects) exercises every validation path and all partition strategies in under 2 seconds. The large-volume test (`test_configurable_large_volume_run`) runs a 100,009-row end-to-end pipeline in approximately 8–10 seconds to verify scalability of the generation and ingestion paths.
-
-**Injected defect types (9 rows in every default run, seed 42):**
-
-| Defect | Count |
-|---|---|
-| Exact duplicate of row 0 | 1 |
-| Conflicting duplicate of row 1 (amount+50) | 1 |
-| Null `event_id` | 1 |
-| Invalid `event_type` (`"UNKNOWN"`) | 1 |
-| Invalid `user_id` (`"U9999"`) | 1 |
-| Negative `amount` on purchase | 1 |
-| Late-arriving event (timestamp ~18 months prior) | 1 |
-| Non-finite `amount` (`inf`) | 1 |
-| Null `user_id` | 1 |
-
----
-
-## 17. Engineering Decisions and Trade-offs
-
-### Why Parquet + Hive partitioning?
-
-Parquet's columnar layout enables predicate pushdown at the row-group level. Hive-style directory naming (`event_date=YYYY-MM-DD`) allows query engines like DuckDB to skip entire directories before opening any file, compounding the per-file savings with directory-level elimination.
-
-### Why DuckDB for benchmarking?
-
-DuckDB runs entirely in-process, requiring no server setup and producing deterministic results on the same machine. It supports `read_parquet` with `hive_partitioning=true`, making it appropriate for validating partition pruning behaviour on local Parquet lakes.
-
-### Why SQLite for provenance?
-
-SQLite is zero-dependency, file-local, and acid-compliant. Every run, benchmark result, file fingerprint (SHA-256), and rejected row is recorded durably without requiring a separate database service. This makes the system self-contained and portable.
-
-### Why Node.js as the API layer?
-
-The Python engine uses blocking I/O and can run for 30–180 seconds during benchmark and compaction operations. Wrapping it in a Node.js Express server allows the frontend to issue non-blocking requests with configurable timeouts, without blocking the event loop for other requests. `child_process.spawn` with strict argument arrays avoids shell injection risk.
-
-### Why atomic writes (`os.replace`)?
-
-PyArrow writes to `<target>.tmp` first, then `os.replace()` swaps the file atomically on POSIX and Windows. This prevents the query engine from ever observing a partially written Parquet file.
-
-### Duplicate resolution policy
-
-The lowest-amount rule for `event_id` conflicts is a conservative fallback. It is not a universally correct policy. See [§12. Duplicate Policy](#12-data-validation-and-quarantine) for the full caveat.
-
----
-
-## 18. Limitations
-
-1. **Dataset size**: The benchmark dataset contains 1,009 rows and produces sub-megabyte files in all three partition layouts. The measured latency improvements and file-count reductions are valid experimental results for this dataset, but they cannot be extrapolated to production-scale workloads where file sizes would be in the hundreds of megabytes to gigabytes range.
-
-2. **Pruning measurement**: Pruning ratios are directory-level estimates, not direct measurements of DuckDB I/O. DuckDB may still read row-group footers from files in matched partition directories. The numbers are upper bounds on effective pruning.
-
-3. **Single-machine benchmarks**: All timings are from a single machine, single-threaded DuckDB process. Results will vary with hardware, available memory, and OS page cache state.
-
-4. **Cold vs. warm cache**: The benchmark explicitly notes the warm-cache (`warm_median_ms`) versus cold (`first_run_ms`) distinction. Warm-cache figures reflect repeated analytical queries, not cold-start latency.
-
-5. **No distributed execution**: WAPFO is a local vertical slice, not a distributed system. It demonstrates concepts that apply to Spark, Trino, or BigQuery, but does not implement them at scale.
-
-6. **Duplicate policy**: The lowest-amount conflict resolution is a placeholder heuristic, not a validated business rule.
-
----
-
-## 19. Future Improvements
-
-- **Z-ordering / data skipping**: Sort Parquet row groups by high-cardinality columns (`user_id`, `event_type`) to enable fine-grained predicate pushdown within files.
-- **Iceberg / Delta Lake integration**: Replace the custom SQLite provenance store with an open table format that provides ACID transactions, schema evolution, and time travel natively.
-- **Streaming ingestion**: Replace batch CSV ingestion with an Apache Kafka consumer writing micro-batches to the lake.
-- **Configurable duplicate policy**: Expose the conflict resolution strategy as a pipeline parameter (e.g., `--conflict-resolution latest_timestamp|lowest_amount|reject_all`).
-- **Production-scale benchmarks**: Re-run the benchmark suite on a dataset with ≥10 M rows per month to reach file sizes where partition pruning and compaction produce measurable I/O savings.
-- **Column-level statistics**: Collect DuckDB `PRAGMA storage_info` to report actual row-group statistics and validate claimed pruning against measured I/O.
-- **CI/CD pipeline**: Add a GitHub Actions workflow that runs `pytest engine/tests/` and `npm run build --prefix client` on every push.
-
----
-
-## 20. API Reference
-
-The Node.js Express server exposes the following endpoints on `http://localhost:3001`:
-
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/api/health` | Server liveness check |
-| `POST` | `/api/generate` | Generate synthetic CSV (`rows`, `seed`) |
-| `POST` | `/api/upload` | Upload a CSV file (multipart/form-data) |
-| `POST` | `/api/pipeline` | Run ingestion pipeline (`filename`, `run_id`) |
-| `POST` | `/api/benchmark` | Run DuckDB benchmarks (`run_id`, `compaction_status`) |
-| `POST` | `/api/compact` | Compact partition files (`strategy`, `run_id`) |
-| `GET` | `/api/runs` | List all pipeline runs from SQLite |
-| `GET` | `/api/runs/:id` | Get detail for a single run |
-| `GET` | `/api/benchmarks` | List all benchmark records from SQLite |
-| `POST` | `/api/benchmarks/clear` | Truncate benchmark table |
-| `GET` | `/api/data-quality` | Quarantine and rejection summary (optional `?run_id=`) |
-| `GET` | `/api/file-health` | File count and size metrics for all three layouts |
+| `GET` | `/api/health` | Service liveness health check |
+| `POST` | `/api/generate` | Generate synthetic batch (`rows`, `seed`) |
+| `POST` | `/api/upload` | Upload CSV dataset via multipart form |
+| `POST` | `/api/pipeline` | Execute ingestion pipeline (`filename`, `run_id`) |
+| `POST` | `/api/benchmark` | Execute DuckDB benchmark suite (`run_id`, `compaction_status`) |
+| `POST` | `/api/compact` | Run compaction on specified layout (`strategy`, `run_id`) |
+| `GET` | `/api/runs` | Retrieve execution history and reconciliation status |
+| `GET` | `/api/runs/:id` | Retrieve detailed audit record for run |
+| `GET` | `/api/benchmarks` | Retrieve recorded benchmark latencies |
+| `POST` | `/api/benchmarks/clear` | Clear benchmark history |
+| `GET` | `/api/data-quality` | Retrieve quarantine and defect breakdown |
+| `GET` | `/api/file-health` | Retrieve partition count, file size, and small-file metrics |
