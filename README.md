@@ -7,7 +7,7 @@ A reproducible vertical-slice data engineering system demonstrating time-partiti
 ## 1. Quick Start
 
 ```powershell
-# Terminal 1 — Run test suite (21 unit and integration tests)
+# Terminal 1 — Run test suite (27 unit and integration tests)
 cd c:\CandidateWorkspace\wpto
 python -m pytest engine/tests/ -v
 
@@ -23,16 +23,16 @@ npm run dev
 
 ---
 
-## 2. Architecture
+## 2. Architecture & Data Flow
 
 ```
 Browser (React + Vite :5173)
-        │  HTTP / REST (Axios)
+        │  HTTP / REST (Axios) — live querying, zero hardcoded metric fallbacks
         ▼
 Node.js / Express Backend (:3001)
         │  child_process.spawn — strict argument arrays, no shell interpolation
         ▼
-Python Engine (generator, pipeline, benchmark, compaction)
+Python Engine (generator, validation, pipeline, benchmark, compaction)
         │                                      │
         ▼                                      ▼
 Parquet Data Lake (data/lake/)        SQLite Audit Store (db/wapfo.db)
@@ -57,7 +57,7 @@ $$\text{Total Input} = \text{Accepted Unique} + \text{Exact Duplicate Observatio
 - **Quarantined Records**: 5 (Logged with raw data and rejection reason in SQLite `rejected_rows`)
   1. `conflicting_duplicate`: 1 (Diverging amount collision; lowest purchase amount retained, higher amount quarantined)
   2. `null_event_id`: 1 (Missing primary key)
-  3. `invalid_user_id`: 1 (Invalid foreign reference)
+  3. `invalid_user_id`: 1 (Invalid foreign reference against `data/users.csv`)
   4. `invalid_event_type`: 1 (Unrecognized event type)
   5. `negative_purchase_amount`: 1 (Negative value)
 - **Reconciliation Check**:
@@ -74,9 +74,39 @@ $$\text{Total Input} = \text{Accepted Unique} + \text{Exact Duplicate Observatio
 
 ---
 
-## 4. Empirical Compaction Evidence
+## 4. Duplicate Resolution Policy & Trade-offs
 
-Benchmark execution over daily partition layout before and after PyArrow partition compaction:
+The system handles duplicates deterministically according to their classification:
+
+### A. Exact Duplicates
+- **Definition**: Observations sharing identical `event_id` and 100% identical attribute payloads.
+- **Action**: Retain exactly 1 observation; drop additional identical occurrences during ingestion.
+- **Accounting**: Increments `exact_duplicate_observations` to balance the reconciliation equation.
+
+### B. Conflicting Duplicates
+- **Definition**: Observations sharing the same `event_id` but diverging in payload (e.g. conflicting purchase amounts: $10.00 vs $100.00).
+- **Implemented Policy**: The observation with the **lowest `amount`** is retained, and all other diverging observations in the group are quarantined with `reject_reason = 'conflicting_duplicate'`.
+- **Domain Justification**: For financial/billing event streams, choosing the lowest amount is a **conservative revenue recognition heuristic** that prevents premature revenue overstatement or double-billing before manual human reconciliation.
+- **Architectural Limitations & Alternatives**:
+  - *Lowest amount is not a universal conflict resolution rule*. In general data engineering:
+    1. **Last-Write-Wins (LWW)** is preferred when reliable, monotonic event timestamps are present.
+    2. **Producer Sequence / Version IDs** are preferred when upstream producers emit monotonic revision counters.
+    3. **Quarantine Entire Group (All N Records)** is the zero-assumption, strictly auditable approach when automated selection carries business risk.
+
+---
+
+## 5. Partition Pruning Precision & Compaction Evidence
+
+### Partition Pruning Measurement Precision
+- Using DuckDB's execution engine (`EXPLAIN ANALYZE`), queries with partition column filters (`WHERE event_date = '2024-06-15'`) apply **Hive directory-level partition pruning**:
+  ```text
+  File Filters: event_date = '2024-06-15'::DATE
+  Scanning Files: 1 / 359
+  Total Files Read: 1
+  ```
+- **Precision Notice**: DuckDB's query plan proves that 358 of 359 daily files were excluded from the table scan. However, low-level OS filesystem metadata access (e.g. whether directory scanning touched file footers during directory traversal) is not claimed without low-level syscall tracing. Metrics are strictly labeled as `estimated_files_scanned / total_eligible_files`.
+
+### Empirical Compaction Evidence
 
 | Metric | Before Compaction | After Compaction | Optimization Delta | Verification Status |
 |---|---|---|---|---|
@@ -88,13 +118,13 @@ Benchmark execution over daily partition layout before and after PyArrow partiti
 
 ### Analytical Result Parity
 All three queries produce **100% identical analytical outputs** before and after compaction, and across all three layout strategies:
-- `full_scan`: `rows=5, sum=1,475,319.10` (Checksum parity: 100% Match)
-- `monthly_filter`: `rows=5, sum=90,867.45` (Checksum parity: 100% Match)
-- `daily_filter`: `rows=4, sum=0.00` (Checksum parity: 100% Match)
+- `full_scan`: `rows=5, sum=1,475,319.10` (Parity: 100% Match)
+- `monthly_filter`: `rows=5, sum=90,867.45` (Parity: 100% Match)
+- `daily_filter`: `rows=4, sum=0.00` (Parity: 100% Match)
 
 ---
 
-## 5. Partitioning and File-Sizing Trade-offs
+## 6. Partitioning and File-Sizing Trade-offs
 
 ### The Core Architectural Tension: Partition Pruning vs. Small-File Proliferation
 
@@ -104,20 +134,20 @@ All three queries produce **100% identical analytical outputs** before and after
 | **Monthly** (`event_month=YYYY-MM`) | Medium (92.3% pruned on monthly query) | 26 files | ~12.8 KB | Sub-MB (Sample Size Constraint) | Moderate event volume (100K–10M rows/month) |
 | **Daily** (`event_date=YYYY-MM-DD`) | Fine (99.7% pruned on daily query) | 359 files | ~7.0 KB | Small-File Warning (<1MB) | High event volume (>1M rows/day) |
 
-### Key Trade-off Dimensions:
+### Key Trade-off Dimensions & Benchmark Scale Disclosures:
 
 1. **Partition Compaction vs. File-Sizing Health**:
    - **Partition Compaction**: Eliminates intra-partition multi-file fragmentation by consolidating multiple micro-batch writes into exactly 1 Parquet file per partition folder.
    - **File-Sizing Health**: Reflects whether individual Parquet files reach the recommended analytical target size (128 MB to 512 MB) for optimal row group compression, dictionary encoding, and sequential I/O throughput.
    - *Sample Size Impact*: On low-volume streams (e.g. 1,009 rows), daily partitioning fractures data across 359 partitions into ~7 KB files. While fully compacted at the partition level, file-sizing remains sub-MB due to total dataset volume.
 
-2. **When to Choose Monthly vs Daily**:
-   - **Daily partitioning** pays off when the volume per day exceeds ~50 MB to 128 MB of compressed data. At low volumes, the metadata overhead of opening and inspecting 359 individual Parquet file footers exceeds the partition pruning benefit, causing `daily` to run slower than `unpartitioned` for small datasets.
-   - **Compaction economics**: PyArrow partition compaction reduced daily file count by 48.9% and cut query latencies by ~50%, demonstrating that minimizing open file handles directly optimizes columnar read latency.
+2. **Experimental Benchmark Limitations**:
+   - The ~50% latency reduction achieved by compaction reflects **small-file open handle reduction** (cutting open file handles from 702 to 359 on disk).
+   - **These experimental results do NOT establish identical percentage gains at production scale**. In multi-terabyte data lakes with large files (>128 MB), query performance is dominated by disk I/O throughput, columnar decompression, and row-group predicate pushdown, rather than directory file-handle overhead.
 
 ---
 
-## 6. Provenance & Lineage Traceability Schema
+## 7. Provenance & Lineage Traceability Schema
 
 Every benchmark measurement is linked to its exact pipeline, dataset, and compaction lifecycle:
 
@@ -134,7 +164,7 @@ Every benchmark measurement is linked to its exact pipeline, dataset, and compac
 
 ---
 
-## 7. Test Suite Coverage & Verification (21/21 Passed)
+## 8. Automated Test Suite (27/27 Passed)
 
 Automated verification via `pytest engine/tests/test_pipeline.py -v`:
 
@@ -159,10 +189,16 @@ Automated verification via `pytest engine/tests/test_pipeline.py -v`:
 19. `test_idempotent_rerun`: Rerunning the same input produces deterministic lake outputs and identical reconciliation checks.
 20. `test_parquet_files_written_all_strategies`: Confirms Parquet files are written to `unpartitioned/`, `monthly/`, and `daily/`.
 21. `test_partial_failure_status_recorded`: Pipeline records failure status in SQLite upon unrecoverable error.
+22. `test_null_user_id_rejected`: Validates explicit rejection of null/empty `user_id`.
+23. `test_non_finite_amount_rejected`: Validates rejection of `inf` non-finite purchase amounts.
+24. `test_conflicting_duplicate_multiple_records`: Validates conflict resolution across >2 diverging records.
+25. `test_exact_duplicates_within_conflict_group`: Validates exact deduplication within a conflicting group.
+26. `test_rerun_same_run_id`: Validates rerun idempotency using an identical run ID.
+27. `test_analytical_parity_duckdb`: Validates 100% result parity across all three partition layouts via DuckDB.
 
 ---
 
-## 8. Technology Stack & Dependencies
+## 9. Technology Stack & Dependencies
 
 - **Language**: Python 3.14 (Engine), Node.js v22 (API), React 18 / Vite 8 (UI)
 - **Columnar Engine**: DuckDB 2.0.0

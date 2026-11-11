@@ -77,36 +77,6 @@ export default function Dashboard() {
 
   const latestBenchmark = benchmarks.length > 0 ? benchmarks[0] : null;
 
-  const isManualRun = selectedRunId.includes("manual");
-  const activeDQ = dataQuality || (selectedRunId === "all" ? {
-    exact_duplicates: 12,
-    conflicting_duplicates: 13,
-    missing_required_fields: 10,
-    invalid_references: 10,
-    invalid_event_types: 13,
-    invalid_amounts: 13,
-  } : (isManualRun ? {
-    exact_duplicates: 1,
-    conflicting_duplicates: 1,
-    missing_required_fields: 0,
-    invalid_references: 0,
-    invalid_event_types: 1,
-    invalid_amounts: 1,
-  } : {
-    exact_duplicates: 1,
-    conflicting_duplicates: 1,
-    missing_required_fields: 1,
-    invalid_references: 1,
-    invalid_event_types: 1,
-    invalid_amounts: 1,
-  }));
-
-  const displayFileHealth = fileHealth || {
-    unpartitioned: { total_files: 2, partition_count: 1, total_bytes: 189513, avg_file_size_bytes: 94756, median_file_size_bytes: 94756, small_file_count: 2 },
-    monthly: { total_files: 26, partition_count: 13, total_bytes: 333914, avg_file_size_bytes: 12842, median_file_size_bytes: 12328, small_file_count: 26 },
-    daily: { total_files: 359, partition_count: 359, total_bytes: 2509532, avg_file_size_bytes: 6990, median_file_size_bytes: 7007, small_file_count: 359 },
-  };
-
   return (
     <div style={{ maxWidth: 1200, margin: "0 auto", paddingBottom: 64 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 24, borderBottom: "1px solid #e5e7eb", paddingBottom: 16 }}>
@@ -202,42 +172,51 @@ export default function Dashboard() {
         <h2 style={{ fontSize: 18, fontWeight: "600", marginBottom: 12, color: "#1f2937" }}>
           2. Data Quality & Defect Quarantine Audit
         </h2>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 14 }}>
-          <QualityCard
-            title="Exact Duplicate Rows"
-            count={activeDQ.exact_duplicates}
-            description="Identical event_id and attributes; dropped prior to lake ingestion"
-            tag="De-duplicated"
-            color="#d97706"
-          />
-          <QualityCard
-            title="Conflicting Duplicate Groups"
-            count={activeDQ.conflicting_duplicates}
-            description="Same event_id with diverging attributes; lowest amount retained, remainder quarantined"
-            tag="Quarantined"
-            color="#dc2626"
-          />
-          <QualityCard
-            title="Missing Required Fields"
-            count={activeDQ.missing_required_fields}
-            description="Records with null or empty event_id primary keys"
-            tag="Quarantined"
-            color="#dc2626"
-          />
-          <QualityCard
-            title="Invalid Foreign References"
-            count={activeDQ.invalid_references}
-            description="References failing valid user_id format and verification"
-            tag="Quarantined"
-            color="#dc2626"
-          />
-          <QualityCard
-            title="Invalid Event Values"
-            count={activeDQ.invalid_event_types + activeDQ.invalid_amounts}
-            description={`Unrecognized event_types (${activeDQ.invalid_event_types}) and negative amounts (${activeDQ.invalid_amounts})`}
-            tag="Quarantined"
-            color="#dc2626"
-          />
+        {!dataQuality ? (
+          <div style={{ padding: 16, background: "#f9fafb", border: "1px solid #e5e7eb", borderRadius: 8, color: "#6b7280", fontSize: 13 }}>
+            Data quality audit metrics loading or unavailable from backend API. Please verify the backend server is running.
+          </div>
+        ) : (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 14 }}>
+            <QualityCard
+              title="Exact Duplicate Rows"
+              count={dataQuality.exact_duplicates}
+              description="Identical event_id and attributes; dropped prior to lake ingestion"
+              tag="De-duplicated"
+              color="#d97706"
+            />
+            <QualityCard
+              title="Conflicting Duplicate Groups"
+              count={dataQuality.conflicting_duplicates}
+              description="Same event_id with diverging attributes; lowest amount retained, remainder quarantined"
+              tag="Quarantined"
+              color="#dc2626"
+            />
+            <QualityCard
+              title="Missing Required Fields"
+              count={dataQuality.missing_required_fields}
+              description="Records with null or empty event_id primary keys"
+              tag="Quarantined"
+              color="#dc2626"
+            />
+            <QualityCard
+              title="Invalid Foreign References"
+              count={dataQuality.invalid_references}
+              description="References failing valid user_id format and verification"
+              tag="Quarantined"
+              color="#dc2626"
+            />
+            <QualityCard
+              title="Invalid Event Values"
+              count={dataQuality.invalid_event_types + dataQuality.invalid_amounts}
+              description={`Unrecognized event_types (${dataQuality.invalid_event_types}) and negative amounts (${dataQuality.invalid_amounts})`}
+              tag="Quarantined"
+              color="#dc2626"
+            />
+          </div>
+        )}
+        <div style={{ marginTop: 10, padding: "8px 12px", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 6, fontSize: 12, color: "#475569" }}>
+          <strong>Duplicate Policy Justification:</strong> For this financial transaction dataset, retaining the lowest amount is a conservative revenue accounting heuristic preventing premature revenue overstatement before human audit. In general streaming architectures, Last-Write-Wins (monotonic event timestamps), producer sequence numbers, or quarantining the entire conflicting group without selection is standard practice.
         </div>
       </div>
 
@@ -281,44 +260,53 @@ export default function Dashboard() {
             })}
           </tbody>
         </table>
+        <div style={{ marginTop: 6, fontSize: 11, color: "#6b7280" }}>
+          * Pruning metric reflects files matching partition directory predicates (estimated_files_scanned / total_eligible_files). DuckDB query plan confirms 1 of 359 files scanned for daily queries; low-level filesystem footer access behavior is not asserted.
+        </div>
       </div>
 
       <div style={{ marginBottom: 32 }}>
         <h2 style={{ fontSize: 18, fontWeight: "600", marginBottom: 12, color: "#1f2937" }}>
           4. Lake Storage & File Health Metrics
         </h2>
-        <table style={{ borderCollapse: "collapse", width: "100%", background: "white", border: "1px solid #e5e7eb", borderRadius: 8, overflow: "hidden" }}>
-          <thead>
-            <tr style={{ background: "#f9fafb" }}>
-              {["Strategy", "Total Files", "Partitions", "Total Storage", "Avg Size", "Median Size", "Small Files (< 1MB)", "Partition Compaction Status", "File-Sizing Health Status"].map((h) => (
-                <th key={h} style={{ borderBottom: "1px solid #e5e7eb", padding: "10px 12px", textAlign: "left", fontSize: 13, color: "#374151" }}>{h}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {Object.entries(displayFileHealth).map(([strategy, stat]) => (
-              <tr key={strategy} style={{ borderBottom: "1px solid #f3f4f6" }}>
-                <td style={{ padding: "10px 12px", fontWeight: "600", textTransform: "capitalize" }}>{strategy}</td>
-                <td style={{ padding: "10px 12px", fontFamily: "monospace" }}>{stat.total_files}</td>
-                <td style={{ padding: "10px 12px", fontFamily: "monospace" }}>{stat.partition_count}</td>
-                <td style={{ padding: "10px 12px", fontFamily: "monospace" }}>{formatBytes(stat.total_bytes)}</td>
-                <td style={{ padding: "10px 12px", fontFamily: "monospace" }}>{formatBytes(stat.avg_file_size_bytes)}</td>
-                <td style={{ padding: "10px 12px", fontFamily: "monospace" }}>{formatBytes(stat.median_file_size_bytes)}</td>
-                <td style={{ padding: "10px 12px", fontFamily: "monospace" }}>{stat.small_file_count}</td>
-                <td style={{ padding: "10px 12px" }}>
-                  <span style={{ fontSize: 11, background: stat.total_files === stat.partition_count ? "#dcfce7" : "#fef9c3", color: stat.total_files === stat.partition_count ? "#15803d" : "#a16207", padding: "2px 8px", borderRadius: 4, fontWeight: "600" }}>
-                    {stat.total_files === stat.partition_count ? "Compacted (1 file/partition)" : "Fragmented (N files/partition)"}
-                  </span>
-                </td>
-                <td style={{ padding: "10px 12px" }}>
-                  <span style={{ fontSize: 11, background: "#fee2e2", color: "#b91c1c", padding: "2px 8px", borderRadius: 4, fontWeight: "500" }}>
-                    Small-File Warning (&lt; 1MB) — Sample size constraint
-                  </span>
-                </td>
+        {!fileHealth ? (
+          <div style={{ padding: 16, background: "#f9fafb", border: "1px solid #e5e7eb", borderRadius: 8, color: "#6b7280", fontSize: 13 }}>
+            Lake file health metrics loading or unavailable from backend API.
+          </div>
+        ) : (
+          <table style={{ borderCollapse: "collapse", width: "100%", background: "white", border: "1px solid #e5e7eb", borderRadius: 8, overflow: "hidden" }}>
+            <thead>
+              <tr style={{ background: "#f9fafb" }}>
+                {["Strategy", "Total Files", "Partitions", "Total Storage", "Avg Size", "Median Size", "Small Files (< 1MB)", "Partition Compaction Status", "File-Sizing Health Status"].map((h) => (
+                  <th key={h} style={{ borderBottom: "1px solid #e5e7eb", padding: "10px 12px", textAlign: "left", fontSize: 13, color: "#374151" }}>{h}</th>
+                ))}
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {Object.entries(fileHealth).map(([strategy, stat]) => (
+                <tr key={strategy} style={{ borderBottom: "1px solid #f3f4f6" }}>
+                  <td style={{ padding: "10px 12px", fontWeight: "600", textTransform: "capitalize" }}>{strategy}</td>
+                  <td style={{ padding: "10px 12px", fontFamily: "monospace" }}>{stat.total_files}</td>
+                  <td style={{ padding: "10px 12px", fontFamily: "monospace" }}>{stat.partition_count}</td>
+                  <td style={{ padding: "10px 12px", fontFamily: "monospace" }}>{formatBytes(stat.total_bytes)}</td>
+                  <td style={{ padding: "10px 12px", fontFamily: "monospace" }}>{formatBytes(stat.avg_file_size_bytes)}</td>
+                  <td style={{ padding: "10px 12px", fontFamily: "monospace" }}>{formatBytes(stat.median_file_size_bytes)}</td>
+                  <td style={{ padding: "10px 12px", fontFamily: "monospace" }}>{stat.small_file_count}</td>
+                  <td style={{ padding: "10px 12px" }}>
+                    <span style={{ fontSize: 11, background: stat.total_files === stat.partition_count ? "#dcfce7" : "#fef9c3", color: stat.total_files === stat.partition_count ? "#15803d" : "#a16207", padding: "2px 8px", borderRadius: 4, fontWeight: "600" }}>
+                      {stat.total_files === stat.partition_count ? "Compacted (1 file/partition)" : "Fragmented (N files/partition)"}
+                    </span>
+                  </td>
+                  <td style={{ padding: "10px 12px" }}>
+                    <span style={{ fontSize: 11, background: "#fee2e2", color: "#b91c1c", padding: "2px 8px", borderRadius: 4, fontWeight: "500" }}>
+                      Small-File Warning (&lt; 1MB) — Sample size constraint
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
         <div style={{ marginTop: 8, padding: "8px 12px", background: "#fefce8", border: "1px solid #fef08a", borderRadius: 6, fontSize: 12, color: "#854d0e" }}>
           <strong>Partition Compaction vs File-Sizing Health Trade-off:</strong> Compaction eliminates intra-partition file fragmentation (1 file/partition). However, low-volume ingestion (1,009 rows) over 359 daily partitions creates sub-MB files (~7 KB). Reaching optimal Parquet file sizes (&gt;128 MB) requires higher batch volume or coarser (monthly/unpartitioned) granularity.
         </div>
@@ -381,6 +369,9 @@ export default function Dashboard() {
             </tr>
           </tbody>
         </table>
+        <div style={{ marginTop: 10, padding: "8px 12px", background: "#fef3c7", border: "1px solid #fde68a", borderRadius: 6, fontSize: 12, color: "#92400e" }}>
+          <strong>Benchmark Limitations & Scale Disclosure:</strong> These measurements demonstrate experimental performance improvements on a small test workload (1,009 rows per run). Compaction halving open file handles yielded a ~50% latency gain on small files (~7 KB). These results do not establish identical percentage gains at production scale (where partitions hold &gt;128 MB files and latency is bound by disk I/O bandwidth and CPU decompression).
+        </div>
       </div>
 
       <div style={{ marginBottom: 32, background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: 16 }}>
