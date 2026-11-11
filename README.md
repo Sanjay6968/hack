@@ -2,12 +2,6 @@
 
 > A reproducible, end-to-end data engineering system demonstrating time-partitioned Parquet data lakes, partition pruning, small-file compaction, DuckDB analytical benchmarking, reconciliation auditing, and a React dashboard — built as a vertical slice from raw CSV to queryable lake.
 
-[![Python](https://img.shields.io/badge/Python-3.14-blue?logo=python)](https://www.python.org/)
-[![Node.js](https://img.shields.io/badge/Node.js-v24-green?logo=node.js)](https://nodejs.org/)
-[![React](https://img.shields.io/badge/React-19-61dafb?logo=react)](https://react.dev/)
-[![DuckDB](https://img.shields.io/badge/DuckDB-2.0.0-yellow)](https://duckdb.org/)
-[![Tests](https://img.shields.io/badge/Tests-29%20passing-brightgreen)](engine/tests/test_pipeline.py)
-[![License](https://img.shields.io/badge/License-MIT-lightgrey)](LICENSE)
 
 ---
 
