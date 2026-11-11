@@ -23,23 +23,29 @@ npm run dev
 
 ---
 
-## 2. Architecture & Data Flow
+## 2. Decoupled Architecture & Service Separation
+
+The system is architected into three strictly decoupled layers operating across isolated runtime boundaries:
 
 ```
-Browser (React + Vite :5173)
-        │  HTTP / REST (Axios) — live querying, zero hardcoded metric fallbacks
+Frontend Client (client/ :5173)
+  ├── Standalone React 18 + Vite SPA with independent package.json
+  ├── Independent build & deployment (compiles to static client/dist/)
+  └── Configurable via client/.env (VITE_API_URL)
+        │
+        │ HTTP REST (JSON) over CORS
         ▼
-Node.js / Express Backend (:3001)
-        │  child_process.spawn — strict argument arrays, no shell interpolation
+Backend API Server (server/ :3001)
+  ├── Standalone Node.js Express service with independent package.json
+  ├── Configurable via server/.env (PORT, PYTHON_BIN)
+  └── Zero shared runtime memory or code coupling with client
+        │
+        │ child_process.spawn with strict argument arrays
         ▼
-Python Engine (generator, validation, pipeline, benchmark, compaction)
-        │                                      │
-        ▼                                      ▼
-Parquet Data Lake (data/lake/)        SQLite Audit Store (db/wapfo.db)
-  ├── unpartitioned/                    ├── runs
-  ├── monthly/ (event_month=YYYY-MM)    ├── rejected_rows
-  └── daily/ (event_date=YYYY-MM-DD)    ├── file_metadata
-                                        └── benchmark_results
+Analytics Engine (engine/) & Lake Storage (data/lake/)
+  ├── Standalone Python 3.14 modules (PyArrow, DuckDB, Pandas)
+  ├── Parquet data lake (unpartitioned, monthly, daily)
+  └── SQLite metadata store (db/wapfo.db)
 ```
 
 ---

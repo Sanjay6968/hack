@@ -1,16 +1,48 @@
-# React + Vite
+# WAPFO Frontend Client
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+Independent React 18 + Vite 8 frontend client for the Workload-Aware Partitioning and File Optimization (WAPFO) platform.
 
-Currently, two official plugins are available:
+---
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## 1. Features
+- Dark bronze / warm gold enterprise dashboard layout.
+- Standalone SPA with client-side routing via `react-router-dom`.
+- Interactive query latency visualizations powered by `recharts`.
+- Live API connectivity health checks against the backend service.
+- Completely decoupled from backend implementation; communicates purely via HTTP JSON REST APIs.
 
-## React Compiler
+---
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## 2. Quick Start
 
-## Expanding the Oxlint configuration
+```powershell
+cd client
+npm install
+npm run dev
+```
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and Oxlint's TypeScript related rules in your project.
+The application will be served locally on `http://localhost:5173`.
+
+---
+
+## 3. Configuration & Environment Variables
+
+Copy `.env.example` to `.env` to configure the target backend API endpoint:
+
+```ini
+VITE_API_URL=http://localhost:3001
+```
+
+If `VITE_API_URL` is omitted, the frontend defaults to `http://localhost:3001` with automated proxy routing configured in `vite.config.js`.
+
+---
+
+## 4. Production Build
+
+To compile a standalone production distribution:
+
+```powershell
+npm run build
+```
+
+Compiled static artifacts are generated into `client/dist/` ready to be served by any static host (Nginx, S3, Cloudflare Pages, etc.).

@@ -1,6 +1,7 @@
 import axios from "axios";
 
-const api = axios.create({ baseURL: "http://localhost:3001" });
+const baseURL = import.meta.env.VITE_API_URL || "http://localhost:3001";
+const api = axios.create({ baseURL });
 
 export const getHealth = () => api.get("/api/health");
 export const generateData = (rows, seed) => api.post("/api/generate", { rows, seed });
